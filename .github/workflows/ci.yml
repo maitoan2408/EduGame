@@ -52,6 +52,7 @@ jobs:
           python-version: "3.12"
       - name: Install CPU inference dependencies (no weights)
         run: |
+          python -m pip install -r requirements-test.txt -c constraints-tested.txt
           python -m pip install torch torchvision -c constraints-tested.txt --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -r requirements.txt -r requirements-test.txt -c constraints-tested.txt
       - name: Smoke and all tests with CPU torch and mocked model

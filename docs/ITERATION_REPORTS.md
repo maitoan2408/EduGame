@@ -106,3 +106,5 @@ CI hosted C2/D: cả 3 jobs Success tại https://github.com/maitoan2408/EduGame
 | Prepared/performance | Preprocess trùng, cache không có ngân sách, thiếu token/lock/RAM metrics; thêm chia nguồn trước resize opt-in | Xem OCR_TEST_REPORT và LOGIC_REPAIR_REPORT | Git log: perf(ocr): reuse prepared pages and expose bounded inference diagnostics |
 
 Mỗi vòng chỉ push Fork/toanbranch sau regression pass. Bằng chứng performance/quality và những phần còn cần dữ liệu thật được ghi rõ tại `experiments/LOGIC_REPAIR_REPORT.md`; không dùng báo cáo này thay cho remote SHA/CI của commit cuối.
+
+CI của `1cd6edb`: core Windows/Linux pass; CPU inference job dừng ở dependency resolution trước khi chạy test. PyTorch CPU index không cung cấp NumPy `2.5.4` trong constraints. Sửa bằng cách cài requirements-test từ PyPI trước, sau đó cài torch/torchvision từ CPU index và các dependency model còn lại; giữ nguyên versions đã kiểm chứng, không thêm package hay thay đổi chính sách mạng.
