@@ -11,6 +11,7 @@ Hỗ trợ:
 import io
 import math
 from contextlib import closing
+from dataclasses import dataclass
 from typing import Union, List, Optional
 import numpy as np
 from PIL import Image, ImageOps
@@ -82,7 +83,14 @@ def load_image_from_bytes(data: bytes, apply_exif: bool = True,
     return pil_img.convert("RGB"), warnings
 
 
-def iter_images_from_pdf(
+@dataclass
+class PDFPageRecord:
+    number: int
+    image: Optional[Image.Image] = None
+    error: str = ''
+
+
+def iter_pdf_page_records(
     pdf_bytes_or_path: Union[bytes, str],
     scale: float = 2.0,
     start_page: int = 0,
@@ -114,23 +122,38 @@ def iter_images_from_pdf(
         if end_page - start_page > page_limit:
             raise ValueError(f"Phạm vi vượt giới hạn {page_limit} trang; hãy chọn phạm vi nhỏ hơn.")
         for page_idx in range(start_page, end_page):
-            page = pdf.get_page(page_idx)
-            bitmap = None
+            page = bitmap = image = None
+            error = ''
             try:
+                page = pdf.get_page(page_idx)
                 width, height = page.get_size()
                 if math.ceil(width * scale) * math.ceil(height * scale) > max_render_pixels:
                     raise ValueError(f"Trang {page_idx + 1} vượt giới hạn {max_render_pixels} pixel render.")
                 bitmap = page.render(scale=scale)
                 # convert() tạo ảnh độc lập trước khi page/bitmap bị giải phóng.
                 image = bitmap.to_pil().convert("RGB")
+            except (ValueError, RuntimeError, OSError) as exc:
+                error = str(exc)
             finally:
                 if bitmap is not None:
                     bitmap.close()
-                page.close()
+                if page is not None:
+                    page.close()
             # No live PDFium page/bitmap is held while inference processes this page.
-            yield image
+            yield PDFPageRecord(page_idx + 1, image, error)
     finally:
         pdf.close()
+
+
+def iter_images_from_pdf(pdf_bytes_or_path, scale=2.0, start_page=0, max_pages=None,
+                         max_render_pixels=20_000_000, page_limit=50):
+    """Compatibility image iterator: fail on a bad page rather than silently skip."""
+    with closing(iter_pdf_page_records(pdf_bytes_or_path, scale, start_page, max_pages,
+                                       max_render_pixels, page_limit)) as records:
+        for record in records:
+            if record.error:
+                raise ValueError(record.error)
+            yield record.image
 
 
 def load_images_from_pdf(pdf_bytes_or_path, scale=2.0, start_page=0, max_pages=None) -> List[Image.Image]:

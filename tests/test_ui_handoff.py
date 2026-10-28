@@ -141,3 +141,25 @@ class UIHandoffTests(unittest.TestCase):
         next(c for c in app.checkbox if 'xác nhận' in c.label).check().run()
         self.button(app, 'Chuyển văn bản sang game').click().run()
         self.assertEqual(app.session_state['received'], [TEXT])
+
+    def test_adding_or_reordering_files_preserves_existing_result_and_edit(self):
+        app = self.app(True)
+        self.extract(app)
+        app.text_area[0].set_value(TEXT + ' saved edit').run()
+        original = app.session_state['files']
+        app.session_state['files'] = original + [('other.pdf', make_one_page_pdf())]
+        app.run()
+        self.assertEqual(app.text_area[0].value, TEXT + ' saved edit')
+        app.session_state['files'] = list(reversed(app.session_state['files']))
+        app.run()
+        self.assertEqual(app.text_area[0].value, TEXT + ' saved edit')
+        self.assertEqual(len(app.exception), 0)
+
+    def test_config_change_keeps_edit_as_nontransferable_draft(self):
+        app = self.app(True)
+        self.extract(app)
+        app.text_area[0].set_value(TEXT + ' important edit').run()
+        app.slider[0].set_value(1700).run()
+        drafts = [s.get('draft_text') for s in app.session_state['ocr_states'].values()]
+        self.assertIn(TEXT + ' important edit', drafts)
+        self.assertFalse(any(b.label == 'Chuyển văn bản sang game' for b in app.button))

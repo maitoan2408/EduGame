@@ -18,3 +18,11 @@ So sánh hậu xử lý cùng chuỗi/ground truth tổng hợp, dùng calculate
 | T7 dòng lặp liền nhau | 0.5152 | 0 | Không / Có |
 
 CER chuẩn hóa whitespace không phát hiện mất layout ở T4/T5, nên test thêm exact string. Đây là regression hậu xử lý, không phải CER inference trên tài liệu thật hoặc bằng chứng accuracy production. Gate có 4 nhóm negative và 3 positive bổ sung; cần tiếp tục hiệu chuẩn trên dữ liệu thật.
+
+## 2. Trạng thái và lỗi từng trang
+
+ID file không còn phụ thuộc vị trí trong danh sách upload. Thêm/sắp xếp file giữ kết quả và bản sửa của file cũ; chỉ file bị bỏ mới giải phóng state/ảnh. Khi đổi config/góc/phạm vi, kết quả không còn được bàn giao, nhưng bản sửa được giữ thành một draft trong session để tải về (không tự khôi phục vào kết quả mới).
+
+PDF renderer tạo record thành công/lỗi theo trang; pipeline giữ chuỗi rỗng tại vị trí lỗi và tiếp tục trang sau, ok tổng vẫn False. Iterator ảnh/list API cũ giữ cơ chế raise khi gặp lỗi để không âm thầm bỏ trang. Đường đọc lớp chữ có cùng hành vi hồi phục. Không cố tiếp tục nếu không mở được cả document hoặc phạm vi không hợp lệ.
+
+AppTest và fixture 3 trang xác nhận lỗi trang 2 không ngăn trang 3; tất cả handles được đóng. Regression toàn bộ pass sau sửa; không có thay đổi thuật toán inference trong vòng này.

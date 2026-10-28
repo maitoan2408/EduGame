@@ -28,9 +28,10 @@ def read_pdf_text(source: bytes | str, cfg: OCRModuleConfig | None = None,
             if start_page >= len(pdf) or end - start_page > cfg.limits.max_pages:
                 raise ValueError('Phạm vi ngoài tài liệu hoặc vượt giới hạn số trang.')
             for index in range(start_page, end):
-                page = pdf.get_page(index)
-                textpage = None
+                page = textpage = None
+                text, ok, reason = '', False, ''
                 try:
+                    page = pdf.get_page(index)
                     textpage = page.get_textpage()
                     if textpage.count_chars() > 200_000:
                         raise ValueError('Lớp chữ vượt giới hạn 200000 ký tự/trang.')
@@ -38,14 +39,17 @@ def read_pdf_text(source: bytes | str, cfg: OCRModuleConfig | None = None,
                     text, ok, reason, _ = clean_and_gate_text(raw, cfg.gate)
                     if not ok:
                         reason = 'Không có lớp chữ dùng được. Hãy chọn Nhận dạng ảnh bằng Vintern. ' + reason
-                    pages.append(text if ok else '')
-                    details.append(dict(page=index + 1, ok=ok, reason=reason))
-                    if not ok:
-                        failures.append(f'[Trang {index + 1}] {reason}')
+                except (ValueError, OSError, RuntimeError) as exc:
+                    reason = f'Lỗi đọc trang: {exc}'
                 finally:
                     if textpage is not None:
                         textpage.close()
-                    page.close()
+                    if page is not None:
+                        page.close()
+                pages.append(text if ok else '')
+                details.append(dict(page=index + 1, ok=ok, reason=reason))
+                if not ok:
+                    failures.append(f'[Trang {index + 1}] {reason}')
         finally:
             pdf.close()
     except (ValueError, OSError, RuntimeError) as exc:

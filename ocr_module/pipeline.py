@@ -14,7 +14,7 @@ from .io_utils import (
     load_image_from_bytes, 
     pil_to_cv2, 
     cv2_to_pil, 
-    iter_images_from_pdf,
+    iter_pdf_page_records,
 )
 from .preprocess import run_preprocessing_pipeline
 from .postprocess import clean_and_gate_text
@@ -100,31 +100,31 @@ def _iter_inputs(source, cfg, pdf_start_page, pdf_max_pages):
         if isinstance(item, Image.Image):
             if item.width * item.height > cfg.limits.max_page_pixels:
                 raise ValueError("Ảnh vượt giới hạn pixel.")
-            yield item, [], False
+            yield item, [], False, ''
         elif isinstance(item, bytes):
             if len(item) > cfg.limits.max_file_bytes:
                 raise ValueError("Ảnh vượt giới hạn dung lượng.")
             image, warnings = load_image_from_bytes(
                 item, apply_exif=cfg.preprocess.enable_exif, max_pixels=cfg.limits.max_page_pixels,
             )
-            yield image, warnings, True
+            yield image, warnings, True, ''
         else:
             raise ValueError("Kiểu đầu vào không hỗ trợ; dùng bytes, path, PIL hoặc list ảnh.")
 
 
 def _iter_pdf(source, cfg, start, count):
     from contextlib import closing
-    with closing(iter_images_from_pdf(
+    with closing(iter_pdf_page_records(
         source, start_page=start, max_pages=count,
         max_render_pixels=cfg.limits.max_page_pixels, page_limit=cfg.limits.max_pages,
     )) as pages:
         while True:
             with timed('pdf_read_render'):
                 try:
-                    image = next(pages)
+                    record = next(pages)
                 except StopIteration:
                     return
-            yield image, [], True
+            yield record.image, [], True, record.error
 
 
 def run_pipeline(
@@ -148,10 +148,12 @@ def run_pipeline(
         if min(cfg.limits.max_pages, cfg.limits.max_page_pixels, cfg.limits.max_file_bytes) <= 0:
             raise ValueError("Giới hạn tài nguyên phải lớn hơn 0.")
         with closing(_iter_inputs(source, cfg, pdf_start_page, pdf_max_pages)) as images:
-            for index, (image, input_warnings, owned) in enumerate(images):
+            for index, (image, input_warnings, owned, read_error) in enumerate(images):
                 number = index + 1 + (pdf_start_page if is_pdf else 0)
                 event('page', number=number)
                 try:
+                    if read_error:
+                        raise ValueError(read_error)
                     text, ok, reason, page_warnings, metrics, preview = process_single_image(
                         image, cfg, manual_rotation_deg,
                     )
@@ -159,7 +161,7 @@ def run_pipeline(
                     text, ok, reason = "", False, f"Lỗi xử lý trang: {exc}"
                     page_warnings, metrics, preview = [], {}, None
                 finally:
-                    if owned:
+                    if owned and image is not None:
                         image.close()
                 prefix = f"[Trang {number}] "
                 warnings.extend(prefix + w for w in input_warnings + page_warnings)

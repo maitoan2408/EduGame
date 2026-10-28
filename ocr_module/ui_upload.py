@@ -19,7 +19,7 @@ from ocr_module.pipeline import OCRResult, run_pipeline
 from ocr_module.preprocess import run_preprocessing_pipeline
 from ocr_module.diagnostics import capture
 from ocr_module.pdf_text import read_pdf_text
-from ocr_module.session_work import get_or_compute
+from ocr_module.session_work import get_or_compute, upload_identities, prune_removed_files, release_images
 
 
 def get_file_md5(data: bytes) -> str:
@@ -28,6 +28,10 @@ def get_file_md5(data: bytes) -> str:
 
 
 def invalidate_result(state: dict) -> None:
+    result = state.get('result')
+    if result is not None and state.get('user_text') and state['user_text'] != result.text:
+        state['draft_text'] = state['user_text']
+        state['draft_context'] = state.get('result_context', '')
     state.update(result=None, user_text="", result_context="")
     state["generation"] = state.get("generation", 0) + 1
     state.pop("processing_time", None)
@@ -121,16 +125,15 @@ def main(text_consumer: TextConsumer | None = None):
     if HEIF_AVAILABLE:
         allowed.extend(["heic", "heif"])
     uploaded = st.file_uploader("Tải ảnh hoặc PDF", type=allowed, accept_multiple_files=True)
-    identities = tuple(f"{index}:{f.name}:{get_file_md5(f.getvalue())}" for index, f in enumerate(uploaded or []))
+    identities = upload_identities(uploaded or [])
     upload_context = (identities, repr(cfg))
     if st.session_state.get("upload_context") != upload_context:
         st.session_state.pop("game_raw_text", None)
-        st.session_state["ocr_states"] = {}
-        # Old editor/acknowledgement widgets must not restore stale data.
-        for key in list(st.session_state):
-            if key.startswith(("text_", "review_")):
-                del st.session_state[key]
         st.session_state["upload_context"] = upload_context
+    if 'ocr_states' not in st.session_state:
+        st.session_state['ocr_states'] = {}
+    active_keys = {hashlib.sha256(identity.encode()).hexdigest() for identity in identities}
+    prune_removed_files(st.session_state.ocr_states, active_keys)
     if not uploaded:
         st.info("Tải tài liệu để bắt đầu.")
         return
@@ -162,6 +165,7 @@ def main(text_consumer: TextConsumer | None = None):
             try:
                 preview_key = (identity, state['rot'], repr(cfg.preprocess), repr(cfg.quality), repr(cfg.limits))
                 if state.get('preview_key') != preview_key:
+                    release_images(state)
                     state['preview'] = preview_processed_image(data, state['rot'], cfg)
                     state['preview_key'] = preview_key
                 original, preview, warnings, metrics, ok, reason = state['preview']
@@ -181,6 +185,10 @@ def main(text_consumer: TextConsumer | None = None):
         if state.get("context") != context:
             invalidate_result(state)
             state["context"] = context
+        if state.get('draft_text'):
+            st.info('Bản sửa trước đã được giữ làm bản nháp. Bản nháp không được tự động chuyển sang game.')
+            st.download_button('Tải bản nháp trước', state['draft_text'],
+                               file_name='ocr_draft.txt', mime='text/plain', key=f'draft_{file_key}')
         requested = st.button("Trích xuất văn bản", key=f"ocr_{file_key}")
         force = st.button('Nhận dạng lại từ đầu', key=f'retry_{file_key}') if state.get('result') is not None else False
         if requested or force:
