@@ -4,7 +4,7 @@ Bao gồm:
 - Chuẩn hóa Unicode NFC (chống lệch dấu tổ hợp tiếng Việt)
 - Làm sạch định dạng markdown thừa từ model sinh ra
 - Chuẩn hóa ngắt dòng, khoảng trắng (giữ cấu trúc 'Thuật ngữ: Định nghĩa')
-- Phát hiện và loại bỏ dòng lặp liên tiếp hoặc kẹt vòng lặp n-gram
+- Giữ dòng lặp của tài liệu, phát hiện kẹt vòng lặp n-gram bằng quality gate
 - Cổng chất lượng (Quality Gate): đánh giá tính hợp lệ của văn bản trích xuất
 """
 
@@ -37,72 +37,28 @@ def normalize_unicode_nfc(text: str) -> str:
 
 
 def clean_markdown_and_artifacts(text: str) -> str:
-    """Loại bỏ các ký tự định dạng markdown thừa mà model có thể tự chèn vào."""
-    # Xóa các thẻ markdown đậm/nghiêng như **, __, *
-    cleaned = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
-    cleaned = re.sub(r"__([^_]+)__", r"\1", cleaned)
-    cleaned = re.sub(r"(?<!\*)\*(?!\*)([^*]+)\*", r"\1", cleaned)
-    
-    # Xóa ký hiệu tiêu đề markdown (# ## ###) ở đầu dòng
-    cleaned = re.sub(r"^[ \t]*#+[ \t]*", "", cleaned, flags=re.MULTILINE)
-    
-    # Xóa các tag giả lập của model như <s>, </s>, <image>, assistant, user
-    cleaned = re.sub(r"</?(?:s|image|assistant|user)>", "", cleaned, flags=re.IGNORECASE)
-    
+    """Conservative markup cleanup; preserve multiplication, powers and code."""
+    cleaned = re.sub(r"(?<![\w*])\*\*([^\W\d_](?:[^*\n]*[^\W\d_])?)\*\*(?![\w*])", r"\1", text)
+    cleaned = re.sub(r"^[ \t]*#{1,6}[ \t]+", "", cleaned, flags=re.MULTILINE)
+    # Only strip model tokens at the boundaries, not literal tags inside a lesson.
+    token = r"</?(?:s|image|assistant|user)>"
+    cleaned = re.sub(rf"^(?:{token})+|(?:{token})+$", "", cleaned, flags=re.IGNORECASE)
     return cleaned
 
 
 def deduplicate_consecutive_lines(text: str) -> str:
-    """Loại bỏ các dòng bị lặp lại liên tiếp do hiện tượng lặp của Vision-Language Model."""
-    lines = text.split("\n")
-    cleaned_lines: List[str] = []
-    prev_line = None
-    for line in lines:
-        stripped = line.strip()
-        if stripped != prev_line or not stripped:
-            cleaned_lines.append(line)
-            if stripped:
-                prev_line = stripped
-    return "\n".join(cleaned_lines)
+    """Compatibility API: preserve repeated source lines; the gate detects loops.
+
+    Identical adjacent lines can be valid answers or table cells. Without spatial
+    provenance it is unsafe to delete them. Keep this callable for existing callers.
+    """
+    return text
 
 
 def normalize_whitespace_and_paragraphs(text: str) -> str:
-    """
-    Chuẩn hóa khoảng trắng và liên kết dòng:
-    - Giữ nguyên các dòng có định dạng thuật ngữ/mục lục (VD: 'Từ khóa:', '1.', '- ')
-    - Gộp các dòng bị ngắt câu bất thường giữa chừng.
-    """
-    lines = text.split("\n")
-    merged_lines: List[str] = []
-    
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            if merged_lines and merged_lines[-1] != "":
-                merged_lines.append("")
-            continue
-            
-        # Chuẩn hóa khoảng trắng nội bộ trong dòng
-        norm_line = re.sub(r"[ \t]+", " ", stripped)
-        
-        # Nếu dòng trước kết thúc không phải dấu câu ngắt dòng (., :, ?, !)
-        # và dòng hiện tại không phải là đầu mục (chữ hoa/số/gạch đầu dòng),
-        # ta nối tiếp vào dòng trước đó.
-        is_bullet = re.match(r"^(?:[-*•]|\d+[\.\)])\s+", norm_line)
-        is_key_value = ":" in norm_line and len(norm_line.split(":", 1)[0]) < 35
-        
-        if (
-            merged_lines 
-            and merged_lines[-1] 
-            and not is_bullet 
-            and not is_key_value 
-            and not merged_lines[-1].endswith((".", ":", "?", "!", ";"))
-        ):
-            merged_lines[-1] += " " + norm_line
-        else:
-            merged_lines.append(norm_line)
-            
-    return "\n".join(merged_lines).strip()
+    """Normalize line endings and trailing whitespace without guessing layout."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in text.split("\n")).strip("\n")
 
 
 def calculate_repetition_rate(text: str, n: int = 4) -> float:
@@ -141,8 +97,11 @@ def validate_extracted_text(
         )
         
     # 2. Tỉ lệ ký tự hợp lệ (chữ cái, chữ số, dấu câu)
-    valid_chars = sum(1 for c in text if c.isalnum() or c in " \n\t.,;:?!-_'\"()[]{}/@#%&+=")
-    valid_ratio = valid_chars / max(cleaned_len, 1)
+    content = ''.join(c for c in normalize_unicode_nfc(text) if not c.isspace())
+    if not any(c.isalnum() for c in content):
+        return False, 'Văn bản không có chữ hoặc số có thể sử dụng.', warnings
+    valid_chars = sum(1 for c in content if c.isalnum() or c in ".,;:?!-_'\"()[]{}/@#%&+=*<>≤≥≠×÷√∑∫∞")
+    valid_ratio = valid_chars / max(len(content), 1)
     if valid_ratio < cfg.min_valid_char_ratio:
         return (
             False,
@@ -189,7 +148,7 @@ def clean_and_gate_text(
     # Bước 2: Dọn markdown và artifacts
     text = clean_markdown_and_artifacts(text)
     
-    # Bước 3: Khử dòng lặp liên tiếp
+    # Bước 3: Giữ dòng lặp hợp lệ (không thể suy provenance chỉ từ chuỗi)
     text = deduplicate_consecutive_lines(text)
     
     # Bước 4: Chuẩn hóa khoảng trắng & ngắt đoạn
