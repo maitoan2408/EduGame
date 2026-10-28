@@ -48,7 +48,8 @@ class UIHandoffTests(unittest.TestCase):
 
     def extract(self, app, result=None):
         with patch('ocr_module.ui_upload.run_pipeline', return_value=result or OCRResult(text=TEXT, ok=True)):
-            self.button(app, "Trích xuất văn bản").click().run()
+            label = 'Nhận dạng lại từ đầu' if result is not None and any(b.label == 'Nhận dạng lại từ đầu' for b in app.button) else 'Trích xuất văn bản'
+            self.button(app, label).click().run()
         self.assertEqual(len(app.exception), 0)
 
     def test_image_and_pdf_deliver_to_real_callback(self):
@@ -117,3 +118,26 @@ class UIHandoffTests(unittest.TestCase):
         self.assertNotIn('game_raw_text', app.session_state)
         self.assertNotIn('received', app.session_state)
         self.assertTrue(any('receiver unavailable' in error.value for error in app.error))
+
+    def test_repeat_click_preserves_edits_and_skips_inference(self):
+        app = self.app()
+        self.extract(app)
+        app.text_area[0].set_value(TEXT + ' edited').run()
+        with patch('ocr_module.ui_upload.run_pipeline') as infer:
+            self.button(app, 'Trích xuất văn bản').click().run()
+            infer.assert_not_called()
+        self.assertEqual(app.text_area[0].value, TEXT + ' edited')
+
+    def test_pdf_text_mode_has_separate_context_and_requires_review(self):
+        app = self.app(True)
+        self.extract(app)
+        next(s for s in app.selectbox if s.label == 'Cách đọc PDF').set_value('pdf_text').run()
+        self.assertEqual(len(app.text_area), 0)
+        with patch('ocr_module.ui_upload.read_pdf_text', return_value=OCRResult(text=TEXT, ok=True, metrics={'requires_review': True})), patch('ocr_module.ui_upload.run_pipeline') as infer:
+            self.button(app, 'Trích xuất văn bản').click().run()
+            infer.assert_not_called()
+        self.button(app, 'Chuyển văn bản sang game').click().run()
+        self.assertNotIn('received', app.session_state)
+        next(c for c in app.checkbox if 'xác nhận' in c.label).check().run()
+        self.button(app, 'Chuyển văn bản sang game').click().run()
+        self.assertEqual(app.session_state['received'], [TEXT])

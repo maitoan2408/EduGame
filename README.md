@@ -147,6 +147,13 @@ Tùy chọn `--images-dir`, `--truth-dir`, `--revision` và `--output` cho tập
 
 ## 5. Hồ sơ kỹ thuật OCR
 
+### Giảm thời gian chờ
+
+Giữ beam 1 để xem chữ trong lúc Vintern nhận dạng. Preview chưa được kiểm tra; chỉ kết quả cuối mới có thể bàn giao.
+PDF có thể copy chữ: chọn cách đọc **Đọc lớp chữ có sẵn**, kiểm tra các hình có chữ và xác nhận thủ công trước khi chuyển. PDF scan giữ **Nhận dạng ảnh bằng Vintern**.
+Bấm lại Trích xuất dùng kết quả hiện tại; **Nhận dạng lại từ đầu** ép chạy inference mới. Mở **Chi tiết thời gian xử lý** để tách tải model, render, preprocess và generation.
+Xem [thiết kế và cách đo trên RTX 2050](docs/experiments/OCR_LATENCY_DESIGN.md). Chưa có benchmark giảm tổng thời gian Vintern thực trên RTX 2050.
+
 - [Đặc tả và nghiệm thu](docs/OCR_PRD.md)
 - [Kiến trúc, Mermaid và quyết định](docs/OCR_ARCHITECTURE.md)
 - [Interface tích hợp](docs/OCR_INTERFACE.md)

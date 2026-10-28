@@ -22,7 +22,7 @@ def deliver_text(*, result: OCRResult, text: str, consumer: TextConsumer | None,
         raise ValueError("Chưa kết nối nơi tiếp nhận văn bản của game.")
     if not isinstance(text, str) or not text.strip():
         raise ValueError("Không thể chuyển văn bản rỗng.")
-    if (not result.ok or text != result.text) and not reviewed:
+    if (not result.ok or text != result.text or result.metrics.get('requires_review', False)) and not reviewed:
         raise ValueError("Hãy kiểm tra và xác nhận thủ công bản văn trước khi chuyển.")
     ok, reason, _ = validate_extracted_text(text, gate)
     if not ok:

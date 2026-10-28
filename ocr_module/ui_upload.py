@@ -17,6 +17,9 @@ from ocr_module.io_utils import (
 )
 from ocr_module.pipeline import OCRResult, run_pipeline
 from ocr_module.preprocess import run_preprocessing_pipeline
+from ocr_module.diagnostics import capture
+from ocr_module.pdf_text import read_pdf_text
+from ocr_module.session_work import get_or_compute
 
 
 def get_file_md5(data: bytes) -> str:
@@ -83,7 +86,7 @@ def render_result(state: dict, file_key: str, filename: str, cfg: OCRModuleConfi
         on_change=lambda: st.session_state.pop("game_raw_text", None),
     )
     text = state["user_text"]
-    review_needed = not result.ok or text != result.text
+    review_needed = not result.ok or text != result.text or result.metrics.get('requires_review', False)
     reviewed = False
     if review_needed:
         # An acknowledgement belongs to the exact editor contents, not a previous edit.
@@ -108,6 +111,10 @@ def main(text_consumer: TextConsumer | None = None):
     st.set_page_config(page_title="OCR Tài liệu Học tập", page_icon="📖", layout="wide")
     st.title("OCR tài liệu ôn tập")
     cfg = render_sidebar_configs()
+    show_partial = st.sidebar.checkbox('Hiện chữ trong lúc nhận dạng', value=True,
+                                       help='Bản xem trước chưa qua kiểm tra, chỉ có với beam 1. Không giảm tổng thời gian suy luận.')
+    if show_partial and cfg.model.num_beams != 1:
+        st.sidebar.info('Beam 3 chỉ hiển thị kết quả khi hoàn tất. Chọn beam 1 để xem chữ sớm.')
     allowed = ["jpg", "jpeg", "png", "webp"]
     if PDF_AVAILABLE:
         allowed.append("pdf")
@@ -140,17 +147,24 @@ def main(text_consumer: TextConsumer | None = None):
             st.error("Tập tin vượt giới hạn 20 MiB. Hãy chia nhỏ tài liệu.")
             continue
         is_pdf = file.name.lower().endswith(".pdf")
-        start, count = 0, None
+        start, count, method = 0, None, 'vintern'
         if is_pdf:
             start = int(st.number_input("Trang bắt đầu", min_value=1, value=1, step=1, key=f"start_{file_key}")) - 1
             count = int(st.number_input("Số trang", min_value=1, max_value=50, value=1, step=1, key=f"count_{file_key}"))
+            method = st.selectbox('Cách đọc PDF', ['vintern', 'pdf_text'],
+                                  format_func=lambda v: 'Nhận dạng ảnh bằng Vintern' if v == 'vintern' else 'Đọc lớp chữ có sẵn (nhanh, cần kiểm tra)',
+                                  key=f'method_{file_key}')
         else:
             for column, (label, delta) in zip(st.columns(3), [("Xoay trái", -90), ("Xoay phải", 90), ("Đặt lại", 0)]):
                 if column.button(label, key=f"{label}_{file_key}"):
                     state["rot"] = (state["rot"] + delta) % 360 if delta else 0
                     invalidate_result(state)
             try:
-                original, preview, warnings, metrics, ok, reason = preview_processed_image(data, state["rot"], cfg)
+                preview_key = (identity, state['rot'], repr(cfg.preprocess), repr(cfg.quality), repr(cfg.limits))
+                if state.get('preview_key') != preview_key:
+                    state['preview'] = preview_processed_image(data, state['rot'], cfg)
+                    state['preview_key'] = preview_key
+                original, preview, warnings, metrics, ok, reason = state['preview']
             except (ValueError, OSError, RuntimeError) as exc:
                 invalidate_result(state)
                 st.error(f"Không thể đọc ảnh: {exc}")
@@ -163,19 +177,56 @@ def main(text_consumer: TextConsumer | None = None):
             if not ok:
                 st.error(reason)
             st.caption(f"Độ nét: {metrics['blur']:.1f}; độ sáng: {metrics['brightness']:.1f}")
-        context = repr((identity, repr(cfg), state["rot"], start, count))
+        context = repr((identity, repr(cfg), state["rot"], start, count, method))
         if state.get("context") != context:
             invalidate_result(state)
             state["context"] = context
-        if st.button("Trích xuất văn bản", key=f"ocr_{file_key}"):
-            invalidate_result(state)
-            with st.spinner("Đang nhận dạng tài liệu..."):
-                before = time.perf_counter()
-                result = run_pipeline(data, cfg, manual_rotation_deg=state["rot"], pdf_start_page=start, pdf_max_pages=count)
+        requested = st.button("Trích xuất văn bản", key=f"ocr_{file_key}")
+        force = st.button('Nhận dạng lại từ đầu', key=f'retry_{file_key}') if state.get('result') is not None else False
+        if requested or force:
+            stage_box, partial_box = st.empty(), st.empty()
+            def progress(entry):
+                labels = dict(preprocess='Đang tiền xử lý ảnh', model_load_or_cache='Đang chuẩn bị model (lần đầu có thể lâu)',
+                              generation='Đang nhận dạng chữ', postprocess='Đang kiểm tra văn bản',
+                              pdf_read_render='Đang đọc trang PDF', tensor_transfer='Đang chuẩn bị dữ liệu GPU',
+                              oom_retry='Thiếu VRAM, đang thử lại với ít ô ảnh hơn')
+                if entry['stage'] in labels:
+                    stage_box.info(labels[entry['stage']])
+                if entry['stage'] == 'model_cache' and not entry['hit']:
+                    stage_box.info('Đang nạp model. Giữ ứng dụng mở để các lần sau dùng lại model.')
+            def partial(text):
+                partial_box.code('Bản xem trước dải ảnh hiện tại — chưa kiểm tra:\n' + text, language=None)
+            before = time.perf_counter()
+            def compute():
+                with capture(progress, partial if show_partial else None) as diagnostic:
+                    if method == 'pdf_text':
+                        result = read_pdf_text(data, cfg, start, count)
+                    else:
+                        result = run_pipeline(data, cfg, manual_rotation_deg=state['rot'], pdf_start_page=start, pdf_max_pages=count)
+                    result.metrics['timings'] = dict(diagnostic.seconds)
+                    result.metrics['execution'] = diagnostic.events
+                    return result
+            with st.spinner('Đang xử lý tài liệu...'):
+                result, reused = get_or_compute(state, context, compute, force)
+            if not reused:
+                invalidate_result(state)
                 state.update(result=result, user_text=result.text, result_context=context,
                              processing_time=time.perf_counter() - before)
+            else:
+                st.info('Đã dùng lại kết quả hiện tại và giữ bản bạn sửa. Chọn Nhận dạng lại từ đầu nếu cần chạy model lại.')
+            state['last_request_seconds'] = time.perf_counter() - before
+            state['reused'] = reused
+            stage_box.empty()
+            partial_box.empty()
         if "processing_time" in state:
-            st.caption(f"Thời gian xử lý: {state['processing_time']:.2f}s")
+            if state.get('reused'):
+                st.caption(f"Lấy lại kết quả: {state['last_request_seconds']:.3f}s; lần nhận dạng gốc: {state['processing_time']:.2f}s")
+            else:
+                st.caption(f"Thời gian xử lý: {state['processing_time']:.2f}s")
+            with st.expander('Chi tiết thời gian xử lý'):
+                metrics = state.get('result').metrics
+                st.json(dict(total_seconds=state['processing_time'], stages=metrics.get('timings', {}),
+                             execution=metrics.get('execution', [])))
         render_result(state, file_key, file.name, cfg, context, text_consumer)
 
 

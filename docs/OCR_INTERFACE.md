@@ -41,6 +41,9 @@ Các test dùng receiver giả; nhóm game cần nối và kiểm thử consumer
 
 ## Giới hạn tài nguyên
 
+Đường đọc lớp chữ PDF opt-in dùng `read_pdf_text` và cùng OCRResult. `metrics.requires_review=True` bắt buộc xác nhận tay trong adapter, kể cả khi text gate pass; lớp chữ có thể thiếu nội dung nằm trong ảnh. Không dùng đường này âm thầm cho scan.
+`metrics.timings`/`execution` là chẩn đoán bổ sung; callback/preview streaming không được coi là dữ liệu bàn giao. Handoff chỉ nhận kết quả cuối đã qua gate/review.
+
 `OCRModuleConfig.limits`: 20 MiB/file, 20 triệu pixel/ảnh hoặc trang PDF sau render, tối đa 50 trang/lượt. Vượt giới hạn trả kết quả thất bại rõ ràng, không âm thầm cắt nội dung.
 UI mặc định chọn một trang PDF. Pipeline render và giải phóng lần lượt từng trang; không giữ toàn bộ raster PDF trong RAM. `load_images_from_pdf` giữ API list cho caller cũ, không nên dùng với PDF dài.
 Các giới hạn vận hành không thay ngưỡng chất lượng. Không lưu upload ra đĩa.

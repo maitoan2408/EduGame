@@ -18,6 +18,7 @@ from .io_utils import (
 )
 from .preprocess import run_preprocessing_pipeline
 from .postprocess import clean_and_gate_text
+from .diagnostics import timed, event
 
 
 def ocr_image_vintern(image, model_cfg, strip_cfg):
@@ -50,12 +51,11 @@ def process_single_image(
     img_bgr = pil_to_cv2(pil_img)
     
     # 2. Tiền xử lý ảnh (Resize, Quality, Deskew, Illumination, ...)
-    proc_bgr, q_passed, q_reason, prep_warnings, metrics = run_preprocessing_pipeline(
-        img_bgr, 
-        prep_cfg=cfg.preprocess, 
-        quality_cfg=cfg.quality, 
-        manual_rotation_deg=manual_rotation_deg
-    )
+    with timed('preprocess'):
+        proc_bgr, q_passed, q_reason, prep_warnings, metrics = run_preprocessing_pipeline(
+            img_bgr, prep_cfg=cfg.preprocess, quality_cfg=cfg.quality,
+            manual_rotation_deg=manual_rotation_deg,
+        )
     
     preview_pil = cv2_to_pil(proc_bgr)
     
@@ -70,7 +70,8 @@ def process_single_image(
         return "", False, f"Lỗi trong quá trình nhận dạng mô hình Vintern: {str(e)}", prep_warnings, metrics, preview_pil
 
     # 4. Hậu xử lý văn bản và Cổng chất lượng đầu ra
-    clean_text, gate_ok, gate_reason, post_warnings = clean_and_gate_text(raw_text, cfg.gate)
+    with timed('postprocess'):
+        clean_text, gate_ok, gate_reason, post_warnings = clean_and_gate_text(raw_text, cfg.gate)
     
     all_warnings = prep_warnings + post_warnings
     return clean_text, gate_ok, gate_reason, all_warnings, metrics, preview_pil
@@ -117,7 +118,12 @@ def _iter_pdf(source, cfg, start, count):
         source, start_page=start, max_pages=count,
         max_render_pixels=cfg.limits.max_page_pixels, page_limit=cfg.limits.max_pages,
     )) as pages:
-        for image in pages:
+        while True:
+            with timed('pdf_read_render'):
+                try:
+                    image = next(pages)
+                except StopIteration:
+                    return
             yield image, [], True
 
 
@@ -144,6 +150,7 @@ def run_pipeline(
         with closing(_iter_inputs(source, cfg, pdf_start_page, pdf_max_pages)) as images:
             for index, (image, input_warnings, owned) in enumerate(images):
                 number = index + 1 + (pdf_start_page if is_pdf else 0)
+                event('page', number=number)
                 try:
                     text, ok, reason, page_warnings, metrics, preview = process_single_image(
                         image, cfg, manual_rotation_deg,

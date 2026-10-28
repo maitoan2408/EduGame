@@ -21,6 +21,7 @@ import re
 import warnings
 
 from .config import ModelConfig, StripSplittingConfig
+from .diagnostics import timed, event, make_streamer
 
 # Các hằng số chuẩn ImageNet theo model card
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -144,7 +145,10 @@ def get_vintern_model(cfg: ModelConfig):
         and _GLOBAL_TOKENIZER is not None
         and _GLOBAL_MODEL_KEY == model_key
     ):
+        event('model_cache', hit=True, device=cfg.device, dtype=str(cfg.torch_dtype))
         return _GLOBAL_MODEL, _GLOBAL_TOKENIZER
+
+    event('model_cache', hit=False, device=cfg.device, dtype=str(cfg.torch_dtype))
 
     if _GLOBAL_MODEL is not None:
         clear_model_cache()
@@ -289,12 +293,18 @@ def merge_strip_texts(texts: List[str]) -> str:
 
 def _chat_strip(model, tokenizer, strip, cfg, gen_config, max_num, use_cuda):
     """Local tensor scope releases references before the caller starts an OOM retry."""
-    pixel_values = load_image_tensor(strip, input_size=cfg.input_size, max_num=max_num).to(cfg.torch_dtype)
-    if use_cuda:
-        pixel_values = pixel_values.cuda()
+    with timed('tensor_transfer'):
+        pixel_values = load_image_tensor(strip, input_size=cfg.input_size, max_num=max_num).to(cfg.torch_dtype)
+        if use_cuda:
+            pixel_values = pixel_values.cuda()
+    generation = dict(gen_config)
+    streamer = make_streamer(tokenizer, cfg.num_beams)
+    if streamer is not None:
+        generation['streamer'] = streamer
     with torch.inference_mode():
-        response, _ = model.chat(tokenizer, pixel_values, cfg.prompt, gen_config,
-                                 history=None, return_history=True)
+        with timed('generation'):
+            response, _ = model.chat(tokenizer, pixel_values, cfg.prompt, generation,
+                                     history=None, return_history=True)
     return response
 
 
@@ -311,7 +321,8 @@ def ocr_image_vintern(
     if cfg.max_num < 1 or cfg.min_num != 1:
         raise ValueError("max_num phải >= 1; min_num hiện chỉ hỗ trợ 1.")
     strips = split_image_into_strips(img_pil, strip_cfg)
-    model, tokenizer = get_vintern_model(cfg)
+    with timed('model_load_or_cache'):
+        model, tokenizer = get_vintern_model(cfg)
     use_cuda = cfg.device == "cuda" and torch.cuda.is_available()
     dtype = cfg.torch_dtype
 
@@ -324,13 +335,15 @@ def ocr_image_vintern(
         repetition_penalty=cfg.repetition_penalty
     )
 
-    for strip in strips:
+    for strip_index, strip in enumerate(strips):
+        event('strip', index=strip_index + 1, total=len(strips))
         try:
             response = _chat_strip(model, tokenizer, strip, cfg, gen_config, cfg.max_num, use_cuda)
         except torch.cuda.OutOfMemoryError:
             if cfg.max_num <= 1:
                 raise
             print(f"[Vintern] OOM: retry max_num={cfg.max_num} -> {max(1, cfg.max_num // 2)}")
+            event('oom_retry', from_tiles=cfg.max_num, to_tiles=max(1, cfg.max_num // 2))
         else:
             strip_outputs.append(response)
             continue

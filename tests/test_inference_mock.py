@@ -83,6 +83,55 @@ class InferenceMockTests(unittest.TestCase):
         self.assertEqual(tuple(value.shape[1:]), (3, 448, 448))
         self.assertTrue(self.torch.isfinite(value).all())
 
+    def test_streaming_preview_does_not_replace_final_response_or_generation_settings(self):
+        from ocr_module.diagnostics import capture
+        class Tokenizer:
+            def decode(self, tokens, **kwargs):
+                return ''.join({1: 'Private prompt', 2: 'Early ', 3: 'text.'}[int(t)] for t in tokens)
+        torch = self.torch
+        class Model:
+            def chat(model, tokenizer, pixels, prompt, generation, **kwargs):
+                streamer = generation['streamer']
+                streamer.put(torch.tensor([[1]]))  # skipped prompt
+                streamer.put(torch.tensor([2]))
+                streamer.put(torch.tensor([3]))
+                streamer.end()
+                return 'Final canonical response.', None
+        previews = []
+        with capture(on_partial=previews.append) as record, patch.object(self.engine, 'get_vintern_model', return_value=(Model(), Tokenizer())), patch.object(self.engine, 'load_image_tensor', return_value=torch.zeros(1)):
+            result = self.engine.ocr_image_vintern(self.image, self.cfg, self.strip)
+        self.assertEqual(result, 'Final canonical response.')
+        self.assertEqual(previews[-1], 'Early text.')
+        self.assertNotIn('Private prompt', ''.join(previews))
+        self.assertIn('generation', record.seconds)
+
+    def test_streaming_disabled_for_beams_without_changing_generation(self):
+        from ocr_module.diagnostics import capture, make_streamer
+        with capture(on_partial=Mock()) as record:
+            self.assertIsNone(make_streamer(object(), 3))
+        self.assertEqual(record.events[-1]['stage'], 'stream_disabled')
+
+    def test_streamer_preserves_actual_transformers_generated_token_ids(self):
+        from transformers import GPT2Config, GPT2LMHeadModel
+        from ocr_module.diagnostics import capture, make_streamer
+        torch = self.torch
+        class Tokenizer:
+            def decode(self, tokens, **kwargs):
+                return ' '.join(str(int(t)) for t in tokens) + ' '
+        with torch.random.fork_rng(devices=[]):
+            torch.manual_seed(7)
+            model = GPT2LMHeadModel(GPT2Config(vocab_size=16, n_embd=8, n_head=1, n_layer=1,
+                                             n_positions=32, eos_token_id=None, pad_token_id=0)).eval()
+            inputs = torch.tensor([[1, 2]])
+            args = dict(max_new_tokens=4, do_sample=False, num_beams=1, pad_token_id=0)
+            with torch.inference_mode():
+                baseline = model.generate(inputs, **args)
+                previews = []
+                with capture(on_partial=previews.append):
+                    candidate = model.generate(inputs, streamer=make_streamer(Tokenizer(), 1), **args)
+            self.assertTrue(torch.equal(baseline, candidate))
+            self.assertTrue(previews[-1].strip())
+
     def test_model_cache_reuses_and_passes_explicit_revision(self):
         engine = self.engine
         self.cfg.revision = 'a' * 40

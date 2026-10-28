@@ -1,5 +1,12 @@
 # Test report — 28/10/2026
 
+## Cập nhật giảm thời gian chờ
+
+Bản latency: **58 tests pass, không skip** trong môi trường đầy đủ; coverage toàn OCR **87%** (1184 statements, 368 branches), diagnostics/session reuse/adapter 100%. Core job không torch skip 13 tests ML/profiling, được chạy bắt buộc trong inference-contract.
+Thêm kiểm chứng actual Transformers generate trên decoder nhỏ local: token IDs streaming/non-streaming bằng nhau; đây không phải chất lượng Vintern thật. PDFium text layer thật có fixture chuỗi khớp chính xác và không render/infer. AppTest kiểm tra cache/sửa tay/cách đọc/context. Chi tiết phạm vi và hạn chế ở `experiments/OCR_LATENCY_DESIGN.md`.
+
+Các con số 49 tests dưới đây là baseline trước đợt latency, được giữ để truy vết.
+
 ## Kết quả xác minh cục bộ
 
 - Baseline e3eeaf8 trong Python mặc định: 3 module discovery lỗi vì thiếu torch, chưa chạy được 6 test. Sau cài đầy đủ dependency, cả 6 test gốc pass trên cùng môi trường; phân biệt lỗi môi trường với lỗi logic.

@@ -81,3 +81,18 @@ CI hosted vòng C1 đã xác minh Success, 2 jobs: https://github.com/maitoan240
 | Tiếp theo | Chủ phân hệ xác nhận model SHA, dữ liệu và máy demo; nhóm game nối callback và test tích hợp thật |
 
 CI hosted C2/D: cả 3 jobs Success tại https://github.com/maitoan2408/EduGame/actions/runs/40552010114 (9636fd9).
+
+## Latency — đo nút thắt, xem chữ sớm và bỏ tính toán lặp
+
+| Trường | Nội dung |
+|---|---|
+| Task | Streaming preview; timing cold/warm; session reuse; PDF text layer opt-in |
+| Nguyên nhân | Người dùng báo tổng gần 120s trên RTX2050, chưa có stage timings. Code UI chạy lại model/preprocess dù kết quả/context không đổi; model.chat chỉ trả khi sinh xong |
+| Files changed | diagnostics.py, session_work.py, pdf_text.py, pipeline.py, ocr_vintern.py, ui_upload.py, handoff.py, profile_ocr.py; tests và docs liên quan |
+| Tests | PASS 58 tests, smoke/compile; coverage 87%; exact token IDs của decoder Transformers local khi có/không streamer |
+| Regression | Baseline 49 tests tiếp tục pass; giữ OCRResult, defaults model/prompt/tiles/dtype/token cap, quality gates |
+| Performance | Chỉ đo được text-layer fixture ngắn: median 0.000287s/20 lượt; không có benchmark Vintern GPU hoặc CER thật |
+| Commit | Xem Git log: perf(ocr): stream previews and reuse current results with stage diagnostics |
+| Push | Xác nhận remote SHA/Actions sau commit, không suy từ bảng này |
+| Rủi ro còn lại | Streaming không giảm tổng inference; chưa tái hiện 120s trên GPU thật. PDF text layer có thể thiếu chữ trong hình nên luôn review tay |
+| Tiếp theo | Đo first/cold và warm bằng Nhận dạng lại từ đầu trên máy người dùng; kiểm tra generation/VRAM trước khi đổi thuật toán |
