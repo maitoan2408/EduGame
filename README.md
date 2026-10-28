@@ -28,7 +28,7 @@ Cắt dải ngang (Horizontal Histogram) nếu tài liệu dày chữ
    ↓
 Mô hình Vintern-1B v3.5 (Tự động hạ max_num nếu OOM trên GPU 4GB)
    ↓
-Hậu xử lý (Chuẩn hóa NFC, dọn markdown, khử lặp) → Cổng chất lượng văn bản
+Hậu xử lý (NFC, giữ công thức/xuống dòng/lặp hợp lệ) → Cổng chất lượng văn bản
    ↓
 Đầu ra chuẩn OCRResult → Giao diện Streamlit / Module tạo câu hỏi Game
 ```
@@ -148,6 +148,10 @@ Tùy chọn `--images-dir`, `--truth-dir`, `--revision` và `--output` cho tập
 ## 5. Hồ sơ kỹ thuật OCR
 
 ### Giảm thời gian chờ
+
+Ảnh preview và inference dùng chung ảnh đã chuẩn bị. Thêm file không xóa kết quả cũ; đổi cấu hình giữ sửa tay thành draft để tải về. Bản nghi cắt token yêu cầu xác nhận trước khi bàn giao.
+Có tùy chọn **Chia trang dài trước khi thu nhỏ (thử nghiệm)**, mặc định tắt vì chưa có CER trên dữ liệu thật và có thể chậm hơn. Ô **Model revision SHA** cho phép pin bản model đã review.
+Để tái lập dependency trực tiếp đã kiểm tra, thêm `-c constraints-tested.txt` vào lệnh pip cài requirements; với torch chọn CPU/CUDA wheel như phần cài đặt. CI dùng profile này. Xem [báo cáo sửa logic](docs/experiments/LOGIC_REPAIR_REPORT.md).
 
 Giữ beam 1 để xem chữ trong lúc Vintern nhận dạng. Preview chưa được kiểm tra; chỉ kết quả cuối mới có thể bàn giao.
 PDF có thể copy chữ: chọn cách đọc **Đọc lớp chữ có sẵn**, kiểm tra các hình có chữ và xác nhận thủ công trước khi chuyển. PDF scan giữ **Nhận dạng ảnh bằng Vintern**.

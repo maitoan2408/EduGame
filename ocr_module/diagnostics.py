@@ -36,6 +36,16 @@ def capture(on_event=None, on_partial=None):
         _ACTIVE.reset(token)
 
 
+@contextmanager
+def ensure_capture():
+    record = _ACTIVE.get()
+    if record is not None:
+        yield record
+    else:
+        with capture() as record:
+            yield record
+
+
 def event(name, **metadata):
     record = _ACTIVE.get()
     if record is not None:
@@ -70,6 +80,14 @@ def make_streamer(tokenizer, num_beams):
             super().__init__(tokenizer, skip_prompt=True, skip_special_tokens=True)
             self.visible = ''
             self.last_sent = 0.0
+            self.output_token_count = 0
+            self.last_output = None
+
+        def put(self, value):
+            if not self.next_tokens_are_prompt:
+                self.output_token_count += value.numel()
+                self.last_output = value.reshape(-1)[-1:].detach()
+            super().put(value)
 
         def on_finalized_text(self, text, stream_end=False):
             self.visible += text

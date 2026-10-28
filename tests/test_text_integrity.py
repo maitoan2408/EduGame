@@ -9,7 +9,7 @@ from ocr_module.postprocess import clean_and_gate_text, validate_extracted_text
 
 class TextIntegrityTests(unittest.TestCase):
     def test_formulas_code_and_answer_layout_survive_cleanup(self):
-        cases = ['Công thức: 2 * 3 * 4 = 24.', 'Power: x**y**z and __init__',
+        cases = ['Công thức: 2 * 3 * 4 = 24.', 'Power: x**y**z and __init__', 'Power: x **y** z',
                  '#include <stdio.h>\nint main() { return 0; }',
                  'A. Photosynthesis\nB. Respiration\nC. Transpiration',
                  'Name\tScore\nAlice\t10\nBob\t20',

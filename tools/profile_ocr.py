@@ -33,12 +33,8 @@ def measure(source, cfg, truth=None):
                   python=platform.python_version(), platform=platform.platform())
     record['stages_seconds'] = diagnostic.seconds
     record['execution'] = diagnostic.events
-    try:
-        import resource
-        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-        record['process_peak_rss_bytes'] = peak if sys.platform == 'darwin' else peak * 1024
-    except ImportError:
-        record['process_peak_rss_bytes'] = None
+    from tools.process_memory import peak_rss_bytes
+    record['process_peak_rss_bytes'] = peak_rss_bytes()
     # Rejection is reported separately; do not score a rejected result as an accurate OCR.
     record['cer'] = calculate_cer(result.text, truth) if truth is not None and result.ok else None
     return record

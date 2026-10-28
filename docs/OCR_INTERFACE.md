@@ -41,6 +41,11 @@ Các test dùng receiver giả; nhóm game cần nối và kiểm thử consumer
 
 ## Giới hạn tài nguyên
 
+Cập nhật logic: upload ID ổn định khi thêm/sắp xếp file; đổi config giữ sửa tay thành draft chỉ để tải về, không tự bàn giao. PDF lỗi từng trang giữ pages rỗng tại trang lỗi và vẫn xử lý trang sau nếu document còn đọc được.
+`PreparedImage` là dữ liệu chuẩn bị nội bộ cho preview/inference, được kiểm tra chữ ký cấu hình và góc; không phải contract mà nhóm game cần nhận. Game tiếp tục chỉ nhận str.
+Thêm 128 MiB tổng upload/lượt, 96 MiB raster cache/session; cache ảnh bị loại không làm mất text/draft. Các giới hạn này không bao gồm toàn bộ RAM process/model.
+Đầu ra nghi chạm giới hạn token hoặc chia vùng thử nghiệm có `requires_review=True`; xác nhận tay không biến chúng thành bằng chứng tài liệu đầy đủ.
+
 Đường đọc lớp chữ PDF opt-in dùng `read_pdf_text` và cùng OCRResult. `metrics.requires_review=True` bắt buộc xác nhận tay trong adapter, kể cả khi text gate pass; lớp chữ có thể thiếu nội dung nằm trong ảnh. Không dùng đường này âm thầm cho scan.
 `metrics.timings`/`execution` là chẩn đoán bổ sung; callback/preview streaming không được coi là dữ liệu bàn giao. Handoff chỉ nhận kết quả cuối đã qua gate/review.
 

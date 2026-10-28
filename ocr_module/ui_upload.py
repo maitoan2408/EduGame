@@ -3,6 +3,7 @@ import hashlib
 import os
 import sys
 import time
+import re
 
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _PROJECT_ROOT not in sys.path:
@@ -13,13 +14,12 @@ import streamlit as st
 from ocr_module.config import OCRModuleConfig
 from ocr_module.handoff import TextConsumer, deliver_text
 from ocr_module.io_utils import (
-    PDF_AVAILABLE, HEIF_AVAILABLE, load_image_from_bytes, pil_to_cv2, cv2_to_pil,
+    PDF_AVAILABLE, HEIF_AVAILABLE, load_image_from_bytes,
 )
-from ocr_module.pipeline import OCRResult, run_pipeline
-from ocr_module.preprocess import run_preprocessing_pipeline
+from ocr_module.pipeline import OCRResult, run_pipeline, prepare_image
 from ocr_module.diagnostics import capture
 from ocr_module.pdf_text import read_pdf_text
-from ocr_module.session_work import get_or_compute, upload_identities, prune_removed_files, release_images
+from ocr_module.session_work import get_or_compute, upload_identities, prune_removed_files, release_images, enforce_image_budget
 
 
 def get_file_md5(data: bytes) -> str:
@@ -39,12 +39,21 @@ def invalidate_result(state: dict) -> None:
 
 
 def preview_processed_image(file_bytes, rotation_deg, cfg):
+    original, prepared = prepare_uploaded_preview(file_bytes, rotation_deg, cfg)
+    return original, prepared.image, prepared.warnings, prepared.metrics, prepared.ok, prepared.reason
+
+
+def prepare_uploaded_preview(file_bytes, rotation_deg, cfg):
     original, _ = load_image_from_bytes(file_bytes, apply_exif=cfg.preprocess.enable_exif,
                                        max_pixels=cfg.limits.max_page_pixels)
-    processed, ok, reason, warnings, metrics = run_preprocessing_pipeline(
-        pil_to_cv2(original), cfg.preprocess, cfg.quality, rotation_deg,
-    )
-    return original, cv2_to_pil(processed), warnings, metrics, ok, reason
+    try:
+        prepared = prepare_image(original, cfg, rotation_deg)
+    except Exception:
+        original.close()
+        raise
+    # Only downsize the display copy after preparing the OCR image from the source.
+    original.thumbnail((1600, 1600))
+    return original, prepared
 
 
 def render_sidebar_configs() -> OCRModuleConfig:
@@ -59,11 +68,20 @@ def render_sidebar_configs() -> OCRModuleConfig:
             name = "enable_" + flag
             setattr(cfg.preprocess, name, st.checkbox(label, value=getattr(cfg.preprocess, name)))
         cfg.preprocess.max_dimension = st.slider("Cạnh tối đa (px)", 1200, 3000, cfg.preprocess.max_dimension, step=100)
+        cfg.preprocess.enable_page_regions = st.checkbox('Chia trang dài trước khi thu nhỏ (thử nghiệm)', value=False,
+            help='Giữ chi tiết từng vùng nhưng có thể chạy chậm hơn. Chưa có CER trên dữ liệu thật; mặc định tắt.')
     with st.sidebar.expander("Vintern"):
         cfg.model.max_num = st.slider("Số ô ảnh tối đa", 1, 8, cfg.model.max_num)
         cfg.model.num_beams = st.selectbox("Số beam", [1, 3])
         cfg.model.repetition_penalty = st.slider("Phạt lặp từ", 1.0, 2.5, cfg.model.repetition_penalty, step=0.1)
         cfg.model.max_new_tokens = st.slider("Token tối đa", 256, 2048, cfg.model.max_new_tokens, step=128)
+        revision = st.text_input('Model revision SHA (tùy chọn)', value='').strip()
+        if revision:
+            if not re.fullmatch(r'[0-9a-fA-F]{40}', revision):
+                st.session_state.pop('game_raw_text', None)
+                st.error('Model revision phải là SHA 40 ký tự đã được kiểm tra.')
+                st.stop()
+            cfg.model.revision = revision
     with st.sidebar.expander("Ngưỡng chất lượng"):
         cfg.quality.blur_threshold = st.number_input("Ngưỡng mờ", min_value=0.0, value=cfg.quality.blur_threshold)
         cfg.quality.min_brightness = st.number_input("Độ sáng tối thiểu", min_value=0.0, max_value=255.0, value=cfg.quality.min_brightness)
@@ -140,6 +158,11 @@ def main(text_consumer: TextConsumer | None = None):
     if len(uploaded) > cfg.limits.max_pages:
         st.error(f"Chọn tối đa {cfg.limits.max_pages} tập tin mỗi lượt.")
         return
+    if sum(getattr(f, 'size', len(f.getvalue())) for f in uploaded) > cfg.limits.max_batch_bytes:
+        for state in st.session_state.ocr_states.values():
+            release_images(state)
+        st.error('Tổng dung lượng vượt 128 MiB mỗi lượt. Hãy chia nhỏ nhóm tài liệu.')
+        return
     for identity, file in zip(identities, uploaded):
         file_key = hashlib.sha256(identity.encode()).hexdigest()
         data = file.getvalue()
@@ -163,12 +186,13 @@ def main(text_consumer: TextConsumer | None = None):
                     state["rot"] = (state["rot"] + delta) % 360 if delta else 0
                     invalidate_result(state)
             try:
-                preview_key = (identity, state['rot'], repr(cfg.preprocess), repr(cfg.quality), repr(cfg.limits))
+                preview_key = ('prepared-v2', identity, state['rot'], repr(cfg.preprocess), repr(cfg.quality), repr(cfg.limits), repr(cfg.strip))
                 if state.get('preview_key') != preview_key:
                     release_images(state)
-                    state['preview'] = preview_processed_image(data, state['rot'], cfg)
+                    state['preview'] = prepare_uploaded_preview(data, state['rot'], cfg)
                     state['preview_key'] = preview_key
-                original, preview, warnings, metrics, ok, reason = state['preview']
+                original, prepared = state['preview']
+                preview, warnings, metrics, ok, reason = prepared.image, prepared.warnings, prepared.metrics, prepared.ok, prepared.reason
             except (ValueError, OSError, RuntimeError) as exc:
                 invalidate_result(state)
                 st.error(f"Không thể đọc ảnh: {exc}")
@@ -210,7 +234,7 @@ def main(text_consumer: TextConsumer | None = None):
                     if method == 'pdf_text':
                         result = read_pdf_text(data, cfg, start, count)
                     else:
-                        result = run_pipeline(data, cfg, manual_rotation_deg=state['rot'], pdf_start_page=start, pdf_max_pages=count)
+                        result = run_pipeline(data if is_pdf else prepared, cfg, manual_rotation_deg=state['rot'], pdf_start_page=start, pdf_max_pages=count)
                     result.metrics['timings'] = dict(diagnostic.seconds)
                     result.metrics['execution'] = diagnostic.events
                     return result
@@ -236,6 +260,8 @@ def main(text_consumer: TextConsumer | None = None):
                 st.json(dict(total_seconds=state['processing_time'], stages=metrics.get('timings', {}),
                              execution=metrics.get('execution', [])))
         render_result(state, file_key, file.name, cfg, context, text_consumer)
+        state['_last_touched'] = time.monotonic()
+        enforce_image_budget(st.session_state.ocr_states, cfg.limits.max_session_image_bytes)
 
 
 if __name__ == "__main__":

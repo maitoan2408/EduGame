@@ -1,5 +1,17 @@
 # Test report — 28/10/2026
 
+## Cập nhật sửa logic theo ưu tiên
+
+**74 tests pass, không skip** trong profile đầy đủ CPU; coverage toàn OCR khoảng **88%**, hậu xử lý/quality gate/session cache/adapter 100%. Profile core không torch skip 15 tests ML/profiling, được chạy trong job inference-contract. Smoke đầy đủ, compileall, pip check và diff check đều đạt; CI xác minh đúng SHA sau push.
+
+Regression mới bảo vệ phép nhân/lũy thừa/code, đáp án A/B/C, tab/cột và dòng lặp; chặn dấu câu-only và whitespace che emoji. AppTest giữ bản sửa khi thêm/sắp xếp file và giữ draft khi thay config. PDF 3 trang lỗi trang 2 vẫn thử trang 3 ở cả renderer và text-layer.
+
+Ảnh chuẩn bị dùng chung preview/inference có test một lần preprocess và exact pixel; chữ ký bảo vệ cả góc, preprocess, quality, limits và strip settings. Cache eviction giữ text/draft và đóng cả ảnh vùng. Windows memory có test API thật trên CI Windows và test counter >4 GiB bằng API giả. Token budget/EOS và review gate có regression.
+
+`constraints-tested.txt` chốt phiên bản dependency trực tiếp trong CI. Đây chưa phải lock transitive/driver hoặc benchmark inference GPU. Chia vùng trước resize là opt-in mặc định tắt, chỉ có test logic/pixel/assembly bằng OCR mock; chưa có CER thật để chọn default mới. Xem `experiments/LOGIC_REPAIR_REPORT.md` cho paired regression/benchmark và giới hạn.
+
+Các phần dưới đây là lịch sử baseline trước đợt sửa logic.
+
 ## Cập nhật giảm thời gian chờ
 
 Bản latency: **58 tests pass, không skip** trong môi trường đầy đủ; coverage toàn OCR **87%** (1184 statements, 368 branches), diagnostics/session reuse/adapter 100%. Core job không torch skip 13 tests ML/profiling, được chạy bắt buộc trong inference-contract.

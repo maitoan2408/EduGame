@@ -59,6 +59,7 @@ class PreprocessConfig:
     
     enable_denoise: bool = False         # Bước 8: Khử nhiễu nhẹ (chỉ khi đo thấy nhiễu hạt)
     enable_sharpen: bool = False         # Bước 9: Unsharp mask nhẹ khi ảnh hơi mờ
+    enable_page_regions: bool = False    # Experimental: split long source before resize; opt-in pending real CER.
 
 
 @dataclass
@@ -117,6 +118,8 @@ class ResourceLimits:
     max_file_bytes: int = 20 * 1024 * 1024
     max_page_pixels: int = 20_000_000
     max_pages: int = 50
+    max_batch_bytes: int = 128 * 1024 * 1024
+    max_session_image_bytes: int = 96 * 1024 * 1024
 
 
 @dataclass

@@ -22,6 +22,7 @@ import warnings
 
 from .config import ModelConfig, StripSplittingConfig
 from .diagnostics import timed, event, make_streamer
+from .regions import find_horizontal_split_points, merge_strip_texts
 
 # Các hằng số chuẩn ImageNet theo model card
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -117,8 +118,12 @@ _MODEL_LOCK = RLock()
 def _serialized(function):
     @wraps(function)
     def locked(*args, **kwargs):
-        with _MODEL_LOCK:
+        with timed('model_lock_wait'):
+            _MODEL_LOCK.acquire()
+        try:
             return function(*args, **kwargs)
+        finally:
+            _MODEL_LOCK.release()
     return locked
 
 
@@ -189,6 +194,9 @@ def get_vintern_model(cfg: ModelConfig):
     _GLOBAL_MODEL = model
     _GLOBAL_TOKENIZER = tokenizer
     _GLOBAL_MODEL_KEY = model_key
+    resolved = getattr(getattr(model, 'config', None), '_commit_hash', None)
+    event('model_revision', requested=cfg.revision,
+          resolved=resolved if isinstance(resolved, str) and re.fullmatch(r'[0-9a-fA-F]{40}', resolved) else None)
     print("[Vintern] Tai mo hinh thanh cong.")
     return _GLOBAL_MODEL, _GLOBAL_TOKENIZER
 
@@ -197,46 +205,6 @@ def get_vintern_model(cfg: ModelConfig):
 # 3. Kỹ thuật cắt dải ảnh cho tài liệu dày chữ (Strip Splitting)
 # -------------------------------------------------------------
 
-def find_horizontal_split_points(
-    img_pil: Image.Image, 
-    min_strip_height: int = 600, 
-    overlap_px: int = 60
-) -> List[Tuple[int, int]]:
-    """
-    Tìm vị trí cắt theo khoảng trống giữa các dòng chữ bằng histogram chiếu ngang.
-    Trả về danh sách (y_start, y_end) của từng dải với vùng chồng nhau overlap_px.
-    """
-    w, h = img_pil.size
-    if h <= min_strip_height * 1.5:
-        return [(0, h)]
-
-    import cv2
-    gray = np.array(img_pil.convert("L"))
-    # Điểm tối (chữ) -> nhị phân đảo
-    _, binary = cv2.threshold(gray, 200, 255, cv2.THRESH_BINARY_INV)
-    # Histogram tổng điểm chữ theo từng hàng
-    horizontal_proj = np.sum(binary, axis=1)
-
-    split_points = [0]
-    current_y = min_strip_height
-
-    while current_y < h - (min_strip_height // 2):
-        # Tìm vùng ít chữ nhất (tổng điểm tối nhỏ nhất) quanh khoảng current_y +/- 150px
-        search_start = max(0, current_y - 120)
-        search_end = min(h, current_y + 120)
-        valley = int(search_start + np.argmin(horizontal_proj[search_start:search_end]))
-        split_points.append(valley)
-        current_y = valley + min_strip_height
-
-    split_points.append(h)
-
-    strips_coords = []
-    for i in range(len(split_points) - 1):
-        y0 = max(0, split_points[i] - (overlap_px if i > 0 else 0))
-        y1 = min(h, split_points[i + 1] + (overlap_px if i < len(split_points) - 2 else 0))
-        strips_coords.append((y0, y1))
-
-    return strips_coords
 
 
 def split_image_into_strips(img_pil: Image.Image, strip_cfg: StripSplittingConfig) -> List[Image.Image]:
@@ -252,39 +220,6 @@ def split_image_into_strips(img_pil: Image.Image, strip_cfg: StripSplittingConfi
     return strips
 
 
-def merge_strip_texts(texts: List[str]) -> str:
-    """
-    Ghép kết quả text từ các dải ảnh liên tiếp và loại bỏ dòng trùng
-    ở vùng overlap giữa 2 dải kề nhau.
-    """
-    if not texts:
-        return ""
-    if len(texts) == 1:
-        return texts[0].strip()
-
-    final_lines: List[str] = []
-    
-    for t_idx, text in enumerate(texts):
-        lines = [l.strip() for l in text.split("\n") if l.strip()]
-        if not final_lines:
-            final_lines.extend(lines)
-            continue
-
-        # Kiểm tra xem các dòng đầu của dải hiện tại có trùng với các dòng cuối của dải trước không
-        overlap_found = False
-        for k in range(min(5, len(lines)), 0, -1):
-            candidate_prefix = lines[:k]
-            candidate_suffix = final_lines[-k:]
-            if candidate_prefix == candidate_suffix:
-                # Trùng khớp hoàn toàn k dòng ở vùng nối
-                final_lines.extend(lines[k:])
-                overlap_found = True
-                break
-                
-        if not overlap_found:
-            final_lines.extend(lines)
-
-    return "\n".join(final_lines)
 
 
 # -------------------------------------------------------------
@@ -297,14 +232,34 @@ def _chat_strip(model, tokenizer, strip, cfg, gen_config, max_num, use_cuda):
         pixel_values = load_image_tensor(strip, input_size=cfg.input_size, max_num=max_num).to(cfg.torch_dtype)
         if use_cuda:
             pixel_values = pixel_values.cuda()
+    event('vision_input', actual_tiles=getattr(pixel_values, 'shape', (None,))[0], max_num=max_num,
+          device='cuda' if use_cuda else 'cpu', dtype=str(cfg.torch_dtype))
     generation = dict(gen_config)
     streamer = make_streamer(tokenizer, cfg.num_beams)
     if streamer is not None:
         generation['streamer'] = streamer
     with torch.inference_mode():
+        import time
+        before = time.perf_counter()
         with timed('generation'):
             response, _ = model.chat(tokenizer, pixel_values, cfg.prompt, generation,
                                      history=None, return_history=True)
+        elapsed = time.perf_counter() - before
+    count, estimated, ended_with_eos = None, True, False
+    if streamer is not None and streamer.output_token_count:
+        count = streamer.output_token_count
+        estimated = False
+        eos = getattr(tokenizer, 'eos_token_id', None)
+        ended_with_eos = streamer.last_output is not None and int(streamer.last_output.item()) == eos
+    else:
+        try:
+            count = len(tokenizer.encode(response, add_special_tokens=False))
+        except (AttributeError, TypeError):
+            pass
+    event('generation_output', output_tokens=count, estimated=estimated,
+          tokens_per_second=count / elapsed if count is not None and elapsed else None)
+    if count is not None and count >= cfg.max_new_tokens and not ended_with_eos:
+        event('possible_truncation', token_limit=cfg.max_new_tokens, estimated=estimated)
     return response
 
 

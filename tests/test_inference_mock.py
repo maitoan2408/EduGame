@@ -64,6 +64,49 @@ class InferenceMockTests(unittest.TestCase):
         self.assertEqual(args[2], self.cfg.prompt)
         self.assertEqual(args[3], dict(max_new_tokens=1024, do_sample=False, num_beams=1, repetition_penalty=1.2))
 
+    def test_estimated_token_limit_marks_result_for_review(self):
+        from ocr_module.config import OCRModuleConfig
+        from ocr_module.pipeline import run_pipeline
+        from ocr_module.handoff import deliver_text
+        cfg = OCRModuleConfig()
+        cfg.model.max_new_tokens = 4
+        cfg.preprocess.enable_quality_check = False
+        cfg.preprocess.enable_illumination_fix = False
+        class Tokenizer:
+            def encode(self, text, **kwargs): return [1, 2, 3, 4]
+        model = Mock()
+        model.chat.return_value = ('Valid but possibly incomplete lesson.', None)
+        with patch.object(self.engine, 'get_vintern_model', return_value=(model, Tokenizer())), patch.object(self.engine, 'load_image_tensor', return_value=self.torch.zeros(1)):
+            result = run_pipeline(self.image, cfg)
+        self.assertTrue(result.ok)
+        self.assertTrue(result.metrics['requires_review'])
+        self.assertTrue(any('giới hạn token' in w for w in result.warnings))
+        with self.assertRaises(ValueError):
+            deliver_text(result=result, text=result.text, consumer=Mock(), gate=cfg.gate,
+                         result_context='x', current_context='x')
+
+    def test_stream_token_budget_distinguishes_eos_from_potential_cutoff(self):
+        from ocr_module.diagnostics import capture
+        torch = self.torch
+        self.cfg.max_new_tokens = 2
+        class Tokenizer:
+            def __init__(self, eos): self.eos_token_id = eos
+            def decode(self, values, **kwargs): return 'Valid streamed text '
+        class Model:
+            def chat(model, tokenizer, pixels, prompt, generation, **kwargs):
+                streamer = generation['streamer']
+                for value in [torch.tensor([[1]]), torch.tensor([2]), torch.tensor([3])]:
+                    streamer.put(value)
+                streamer.end()
+                return 'Valid streamed text', None
+        for eos in (3, 9):
+            with capture(on_partial=lambda text: None) as record, patch.object(self.engine, 'get_vintern_model', return_value=(Model(), Tokenizer(eos))), patch.object(self.engine, 'load_image_tensor', return_value=torch.zeros(1)):
+                self.engine.ocr_image_vintern(self.image, self.cfg, self.strip)
+            observed = next(e for e in record.events if e['stage'] == 'generation_output')
+            self.assertEqual(observed['output_tokens'], 2)
+            self.assertFalse(observed['estimated'])
+            self.assertEqual(any(e['stage'] == 'possible_truncation' for e in record.events), eos != 3)
+
     def test_splitting_and_exact_overlap_merge(self):
         e = self.engine
         self.assertEqual(e.merge_strip_texts(['alpha\nbeta', 'beta\ngamma']), 'alpha\nbeta\ngamma')

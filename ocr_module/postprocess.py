@@ -38,8 +38,9 @@ def normalize_unicode_nfc(text: str) -> str:
 
 def clean_markdown_and_artifacts(text: str) -> str:
     """Conservative markup cleanup; preserve multiplication, powers and code."""
-    cleaned = re.sub(r"(?<![\w*])\*\*([^\W\d_](?:[^*\n]*[^\W\d_])?)\*\*(?![\w*])", r"\1", text)
-    cleaned = re.sub(r"^[ \t]*#{1,6}[ \t]+", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"^[ \t]*#{1,6}[ \t]+", "", text, flags=re.MULTILINE)
+    # Only a whole-line heading: inline ** can be Python/math exponentiation.
+    cleaned = re.sub(r"^([ \t]*)\*\*([^\W\d_][^*\n]*[^\W\d_])\*\*[ \t]*$", r"\1\2", cleaned, flags=re.MULTILINE)
     # Only strip model tokens at the boundaries, not literal tags inside a lesson.
     token = r"</?(?:s|image|assistant|user)>"
     cleaned = re.sub(rf"^(?:{token})+|(?:{token})+$", "", cleaned, flags=re.IGNORECASE)

@@ -90,11 +90,11 @@ def evaluate_quality(
             warnings
         )
     elif blur < thresholds.blur_threshold:
-        warnings.append(f"Ảnh hơi mờ (độ nét: {blur:.1f} < {thresholds.blur_threshold:.1f}), hệ thống sẽ thử làm nét nhẹ.")
+        warnings.append(f"Ảnh hơi mờ (độ nét: {blur:.1f} < {thresholds.blur_threshold:.1f}), văn bản có thể khó đọc.")
 
     # Kiểm tra độ sáng
     if brightness < thresholds.min_brightness:
-        warnings.append(f"Ảnh khá tối (độ sáng: {brightness:.1f}/255), hệ thống sẽ tăng cường ánh sáng.")
+        warnings.append(f"Ảnh khá tối (độ sáng: {brightness:.1f}/255), văn bản có thể khó đọc.")
     elif brightness > thresholds.max_brightness:
         warnings.append(f"Ảnh bị lóa sáng / cháy sáng (độ sáng: {brightness:.1f}/255).")
 

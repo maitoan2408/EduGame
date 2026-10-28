@@ -96,3 +96,13 @@ CI hosted C2/D: cả 3 jobs Success tại https://github.com/maitoan2408/EduGame
 | Push | Xác nhận remote SHA/Actions sau commit, không suy từ bảng này |
 | Rủi ro còn lại | Streaming không giảm tổng inference; chưa tái hiện 120s trên GPU thật. PDF text layer có thể thiếu chữ trong hình nên luôn review tay |
 | Tiếp theo | Đo first/cold và warm bằng Nhận dạng lại từ đầu trên máy người dùng; kiểm tra generation/VRAM trước khi đổi thuật toán |
+
+## Logic review — các vòng đã xác nhận sửa
+
+| Vòng | Nguyên nhân / sửa | Kiểm thử | Commit |
+|---|---|---|---|
+| Text integrity | Regex xóa dấu toán/code, gộp dòng, bỏ dòng lặp; whitespace làm sai tỷ lệ gate. Giữ cấu trúc, sửa phép đo, chặn punctuation-only | 61 tests pass, paired text regression T1–T7 | 6e62458 |
+| File/page recovery | Global reset làm mất edits; generator abort làm bỏ trang sau. ID ổn định, draft, page records và tiếp tục lỗi cục bộ | 65 tests pass, AppTest + 3-page fixture | 853a205 |
+| Prepared/performance | Preprocess trùng, cache không có ngân sách, thiếu token/lock/RAM metrics; thêm chia nguồn trước resize opt-in | Xem OCR_TEST_REPORT và LOGIC_REPAIR_REPORT | Git log: perf(ocr): reuse prepared pages and expose bounded inference diagnostics |
+
+Mỗi vòng chỉ push Fork/toanbranch sau regression pass. Bằng chứng performance/quality và những phần còn cần dữ liệu thật được ghi rõ tại `experiments/LOGIC_REPAIR_REPORT.md`; không dùng báo cáo này thay cho remote SHA/CI của commit cuối.

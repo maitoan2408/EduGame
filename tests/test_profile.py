@@ -28,3 +28,20 @@ class ProfileTests(unittest.TestCase):
             result = measure(b'fixture', cfg, truth='ground truth')
         self.assertFalse(result['ok'])
         self.assertIsNone(result['cer'])
+
+
+class MemoryMetricsTests(unittest.TestCase):
+    def test_process_peak_is_available_on_supported_platform(self):
+        from tools.process_memory import peak_rss_bytes
+        self.assertGreater(peak_rss_bytes(), 0)
+
+    def test_windows_api_keeps_pointer_sized_counters(self):
+        from tools.process_memory import peak_rss_bytes
+        from unittest.mock import Mock
+        kernel, psapi = Mock(), Mock()
+        def query(handle, pointer, size):
+            pointer._obj.PeakWorkingSetSize = 5 * 1024**3
+            return True
+        psapi.GetProcessMemoryInfo.side_effect = query
+        with patch('sys.platform', 'win32'), patch('ctypes.WinDLL', side_effect=[kernel, psapi], create=True):
+            self.assertEqual(peak_rss_bytes(), 5 * 1024**3)
